@@ -87,7 +87,7 @@ export const DataTable: React.FC<DataTableProps> = ({ data, theme }) => {
                   {doc.authority}
                 </td>
                 <td className={`${borderClass} ${cellPadding} align-top text-center page-range-cell`}>
-                  {doc.pageRange || <span className="empty-field">—</span>}
+                  {doc.pageRange ? doc.pageRange.replace(/^'/, '') : (doc.startPage || <span className="empty-field">—</span>)}
                 </td>
               </tr>
             ))}

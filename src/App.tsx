@@ -1,13 +1,14 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { extractDataFromPdf } from './services/geminiService';
+import { extractDataFromFiles } from './services/geminiService';
 import { DataTable } from './components/DataTable';
 import { BannerCarousel } from './components/BannerCarousel';
 import { exportToExcel } from './utils/excelExport';
 import { ExtractedDocument, ProcessingStatus, ExcelExportConfig, ThemeConfig, HistoryItem } from './types';
 import { 
   FileUp, FileSpreadsheet, Loader2, AlertCircle, Check, Copy, Settings, X, 
-  UploadCloud, History, Trash2, Cpu, Palette, Monitor
+  UploadCloud, History, Trash2, Cpu, Palette, Monitor, FileText, Image as ImageIcon,
+  Images, Plus, Sparkles, Globe, CheckCircle2, Layers, Hash
 } from 'lucide-react';
 
 const THEMES: ThemeConfig[] = [
@@ -32,7 +33,7 @@ const PRESET_BG_COLORS = [
 const DEFAULT_BG_COLOR = '#F5FFFA';
 
 const App: React.FC = () => {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [extractedData, setExtractedData] = useState<ExtractedDocument[]>([]);
   const [status, setStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
   const [errorMessage, setErrorMessage] = useState<string>('');
@@ -61,6 +62,7 @@ const App: React.FC = () => {
 
   const [excelConfig] = useState<ExcelExportConfig>({ fontName: 'Times New Roman', fontSize: 14, wrapText: true, allBorders: true });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const addFileInputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const configPanelRef = useRef<HTMLDivElement>(null);
   
@@ -87,7 +89,8 @@ const App: React.FC = () => {
       setProgress(0);
       interval = setInterval(() => {
         setProgress(prev => {
-          if (file && file.size > 20 * 1024 * 1024) {
+          const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+          if (totalSize > 20 * 1024 * 1024) {
              return prev >= 95 ? 95 : prev + 0.15;
           }
           return prev >= 98 ? 98 : prev + (prev > 80 ? 0.3 : 1.5);
@@ -101,28 +104,33 @@ const App: React.FC = () => {
       }, 500);
     }
     return () => clearInterval(interval);
-  }, [status, file]);
+  }, [status, files]);
 
   const notify = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
     setShowNotification({ message, type });
     setTimeout(() => setShowNotification(null), 4000);
   };
 
-  const handleExtract = async (pdfFile: File) => {
-    setFile(pdfFile);
+  const handleExtractFiles = async (targetFiles: File[]) => {
+    if (targetFiles.length === 0) return;
+    setFiles(targetFiles);
     setStatus(ProcessingStatus.PROCESSING);
     setErrorMessage('');
     setExtractedData([]);
     
     try {
-      const data = await extractDataFromPdf(pdfFile);
+      const data = await extractDataFromFiles(targetFiles);
       setExtractedData(data);
       setStatus(ProcessingStatus.SUCCESS);
       
+      const fileNameSummary = targetFiles.length === 1 
+        ? targetFiles[0].name 
+        : `${targetFiles.length} tệp (${targetFiles[0].name}...)`;
+
       const newHistoryItem: HistoryItem = {
         id: Date.now().toString(),
         timestamp: Date.now(),
-        fileName: pdfFile.name,
+        fileName: fileNameSummary,
         data: data
       };
       setHistory(prev => [newHistoryItem, ...prev]);
@@ -135,24 +143,50 @@ const App: React.FC = () => {
     }
   };
 
+  const isAcceptedFile = (f: File) => {
+    return f.type === 'application/pdf' || f.type.startsWith('image/') || /\.(pdf|png|jpe?g|webp|bmp|tiff)$/i.test(f.name);
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile && selectedFile.type === 'application/pdf') {
-      handleExtract(selectedFile);
-    } else if (selectedFile) {
-      notify("Hệ thống chỉ hỗ trợ định dạng PDF.", "error");
+    const selected = Array.from(e.target.files || []) as File[];
+    const valid = selected.filter(isAcceptedFile);
+    
+    if (valid.length > 0) {
+      handleExtractFiles(valid);
+    } else if (selected.length > 0) {
+      notify("Hệ thống chỉ hỗ trợ định dạng PDF hoặc hình ảnh (PNG, JPG, WEBP...).", "error");
+    }
+  };
+
+  const handleAppendFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files || []) as File[];
+    const valid = selected.filter(isAcceptedFile);
+    if (valid.length > 0) {
+      const combined = [...files, ...valid];
+      handleExtractFiles(combined);
+    }
+  };
+
+  const handleRemoveFile = (index: number) => {
+    const updated = files.filter((_, i) => i !== index);
+    if (updated.length === 0) {
+      setFiles([]);
+      setStatus(ProcessingStatus.IDLE);
+      setExtractedData([]);
+    } else {
+      handleExtractFiles(updated);
     }
   };
 
   const handleExport = () => {
     if (extractedData.length === 0) return;
-    exportToExcel(extractedData, `ket_qua_${file?.name.split('.')[0] || 'trich_xuat'}`, excelConfig);
+    const baseName = files.length > 0 ? files[0].name.split('.')[0] : 'trich_xuat';
+    exportToExcel(extractedData, `ket_qua_${baseName}`, excelConfig);
     notify("Đã xuất file Excel thành công", "success");
   };
 
   const handleCopy = async () => {
     if (extractedData.length === 0) return;
-    // Sao chép 5 cột
     const rows = extractedData.map(d => 
       `${d.symbol}\t${d.date}\t${d.docType} ${d.summary}\t${d.authority}\t${d.pageRange}`
     ).join('\n');
@@ -175,10 +209,13 @@ const App: React.FC = () => {
   const handleLoadHistory = (item: HistoryItem) => {
     setExtractedData(item.data);
     setStatus(ProcessingStatus.SUCCESS);
-    setFile(new File([], item.fileName));
+    setFiles([new File([], item.fileName)]);
     setShowHistory(false);
     notify(`Đã tải lại kết quả: ${item.fileName}`, "success");
   };
+
+  const imageCount = files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp|bmp|tiff)$/i.test(f.name)).length;
+  const pdfCount = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')).length;
 
   return (
     <div 
@@ -193,7 +230,7 @@ const App: React.FC = () => {
             </div>
             <div className="flex flex-col">
               <span className={`text-xl font-black text-${g}-900 tracking-tight leading-none`}>TRÍCH XUẤT TÀI LIỆU CHÍNH QUYỀN</span>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Hệ thống trích xuất văn bản v2.1</span>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Hệ thống trích xuất văn bản v2.2 • Hỗ trợ PDF & Nhiều ảnh</span>
             </div>
           </div>
 
@@ -227,18 +264,40 @@ const App: React.FC = () => {
               </div>
               
               <div className="relative z-10">
-                <div className="flex items-center gap-5 mb-12">
-                  <div className={`p-5 bg-${p}-50 text-${p}-500 rounded-[2rem] shadow-inner`}>
-                    <UploadCloud size={32} />
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
+                  <div className="flex items-center gap-5">
+                    <div className={`p-5 bg-${p}-50 text-${p}-500 rounded-[2rem] shadow-inner`}>
+                      <UploadCloud size={32} />
+                    </div>
+                    <div>
+                      <h3 className="text-3xl font-black text-slate-900 leading-tight">Trung tâm bóc tách</h3>
+                      <p className="text-slate-500 font-medium text-lg">Phân tích văn bản PDF & Đính kèm nhiều hình ảnh</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-3xl font-black text-slate-900 leading-tight">Trung tâm bóc tách</h3>
-                    <p className="text-slate-500 font-medium text-lg">Phân tích văn bản hành chính theo quy chuẩn 2024</p>
+
+                  {/* Feature indicators for French, Telex, 1 Page = 1 Summary & Pencil Page Numbers */}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="inline-flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-800 font-bold text-xs rounded-full border border-blue-200 shadow-sm">
+                      <Globe size={14} className="text-blue-600" />
+                      Tuyệt đối không dịch văn bản tiếng Pháp (100% nguyên bản)
+                    </span>
+                    <span className="inline-flex items-center gap-2 px-4 py-2 bg-amber-50 text-amber-800 font-bold text-xs rounded-full border border-amber-200 shadow-sm">
+                      <FileText size={14} className="text-amber-600" />
+                      Mỗi trang PDF = 1 trích yếu nội dung
+                    </span>
+                    <span className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-800 font-bold text-xs rounded-full border border-indigo-200 shadow-sm">
+                      <Hash size={14} className="text-indigo-600" />
+                      Chính xác số & khoảng trang bút chì góc phải trên
+                    </span>
+                    <span className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 font-bold text-xs rounded-full border border-emerald-100 shadow-sm">
+                      <Sparkles size={14} className="text-emerald-600" />
+                      Giải mã Telex & Thêm dấu tiếng Việt
+                    </span>
                   </div>
                 </div>
 
                 <div 
-                  className={`relative border-2 border-dashed rounded-[3rem] p-12 sm:p-24 transition-all cursor-pointer group/upload flex flex-col items-center justify-center ${
+                  className={`relative border-2 border-dashed rounded-[3rem] p-8 sm:p-16 transition-all cursor-pointer group/upload flex flex-col items-center justify-center ${
                     isDragging ? `border-${p}-500 bg-${p}-50/50 scale-[1.01] shadow-2xl` : `border-slate-200 hover:border-${p}-300 hover:bg-slate-50/20`
                   } ${status === ProcessingStatus.PROCESSING ? 'pointer-events-none opacity-60' : ''}`}
                   onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
@@ -246,39 +305,47 @@ const App: React.FC = () => {
                   onDrop={(e) => {
                     e.preventDefault();
                     setIsDragging(false);
-                    const droppedFile = e.dataTransfer.files[0];
-                    if (droppedFile?.type === 'application/pdf') handleExtract(droppedFile);
+                    const droppedFiles = Array.from(e.dataTransfer.files || []) as File[];
+                    const valid = droppedFiles.filter(isAcceptedFile);
+                    if (valid.length > 0) handleExtractFiles(valid);
                   }}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  <input type="file" ref={fileInputRef} className="hidden" accept=".pdf" onChange={handleFileUpload} />
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    className="hidden" 
+                    accept=".pdf,image/*" 
+                    multiple 
+                    onChange={handleFileUpload} 
+                  />
                   
-                  <div className={`w-32 h-32 bg-${p}-50 text-${p}-500 rounded-full flex items-center justify-center mb-10 group-hover/upload:scale-110 transition-transform duration-700 shadow-xl shadow-${p}-500/10`}>
+                  <div className={`w-28 h-28 bg-${p}-50 text-${p}-500 rounded-full flex items-center justify-center mb-8 group-hover/upload:scale-110 transition-transform duration-700 shadow-xl shadow-${p}-500/10`}>
                     {status === ProcessingStatus.PROCESSING ? (
-                      <Loader2 className="animate-spin" size={56} />
+                      <Loader2 className="animate-spin" size={48} />
                     ) : (
-                      <FileUp size={56} />
+                      <Images size={48} />
                     )}
                   </div>
 
-                  <div className="text-center max-w-lg">
+                  <div className="text-center max-w-xl">
                     <p className="text-2xl font-black text-slate-800 mb-3">
-                      {file && status !== ProcessingStatus.IDLE ? file.name : "Kéo thả tài liệu PDF vào đây"}
+                      Kéo thả hoặc chọn tệp PDF / Nhiều hình ảnh
                     </p>
-                    <p className="text-slate-400 font-medium text-lg leading-relaxed">
-                      AI sẽ tự động nhận diện Số hiệu, Ngày tháng, Trích yếu và tính khoảng trang.
+                    <p className="text-slate-400 font-medium text-base leading-relaxed">
+                      Hỗ trợ đính kèm nhiều ảnh trang tài liệu cùng lúc (JPG, PNG, WEBP) hoặc file PDF. AI tự động trích xuất các thông tin số hiệu, ngày tháng, trích yếu và cơ quan ban hành.
                     </p>
                   </div>
 
                   {status === ProcessingStatus.PROCESSING && (
-                    <div className="mt-16 w-full max-w-xl">
+                    <div className="mt-12 w-full max-w-xl">
                       <div className="flex justify-between items-end mb-4">
                         <div className="flex flex-col">
                           <span className={`text-xs font-black text-${p}-600 uppercase tracking-[0.2em] mb-1`}>
-                            Đang kết nối Gemini AI
+                            Đang xử lý dữ liệu qua Gemini AI
                           </span>
                           <span className="text-slate-500 font-bold text-sm">
-                            Vui lòng chờ trong giây lát...
+                            Đang phân tích {files.length} tệp... Vui lòng chờ trong giây lát
                           </span>
                         </div>
                         <span className={`text-3xl font-black text-${p}-600 tabular-nums`}>{Math.round(progress)}%</span>
@@ -292,6 +359,99 @@ const App: React.FC = () => {
                     </div>
                   )}
                 </div>
+
+                {/* Staged / Uploaded Files List */}
+                {files.length > 0 && (
+                  <div className="mt-8 p-6 bg-slate-50/80 rounded-3xl border border-slate-200/80 animate-in fade-in duration-300">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <Layers size={20} className={`text-${p}-600`} />
+                        <span className="font-black text-slate-800 text-sm">
+                          Các tệp đang chọn ({files.length}):
+                        </span>
+                        {pdfCount > 0 && (
+                          <span className="px-3 py-1 bg-red-100 text-red-700 font-bold text-xs rounded-full">
+                            {pdfCount} PDF
+                          </span>
+                        )}
+                        {imageCount > 0 && (
+                          <span className="px-3 py-1 bg-blue-100 text-blue-700 font-bold text-xs rounded-full">
+                            {imageCount} hình ảnh
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            addFileInputRef.current?.click();
+                          }}
+                          className={`flex items-center gap-1.5 px-4 py-2 bg-white text-${p}-600 border border-${p}-200 rounded-xl font-bold text-xs shadow-sm hover:bg-${p}-50 transition-all`}
+                        >
+                          <Plus size={16} /> Thêm ảnh / PDF
+                        </button>
+                        <input 
+                          type="file" 
+                          ref={addFileInputRef} 
+                          className="hidden" 
+                          accept=".pdf,image/*" 
+                          multiple 
+                          onChange={handleAppendFiles} 
+                        />
+                        
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFiles([]);
+                            setStatus(ProcessingStatus.IDLE);
+                            setExtractedData([]);
+                          }}
+                          className="text-xs font-bold text-slate-400 hover:text-rose-600 px-3 py-2 rounded-xl transition-colors"
+                        >
+                          Xóa tất cả
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2.5 max-h-48 overflow-y-auto p-1 custom-scrollbar">
+                      {files.map((fileItem, idx) => {
+                        const isImg = fileItem.type.startsWith('image/') || /\.(png|jpe?g|webp|bmp|tiff)$/i.test(fileItem.name);
+                        return (
+                          <div 
+                            key={idx}
+                            className="flex items-center gap-2.5 px-3.5 py-2 bg-white rounded-2xl border border-slate-200 shadow-sm text-xs font-medium text-slate-700 max-w-xs group"
+                          >
+                            {isImg ? (
+                              <ImageIcon size={16} className="text-blue-500 shrink-0" />
+                            ) : (
+                              <FileText size={16} className="text-red-500 shrink-0" />
+                            )}
+                            <span className="truncate max-w-[150px]" title={fileItem.name}>
+                              {fileItem.name}
+                            </span>
+                            <span className="text-[10px] text-slate-400 shrink-0">
+                              ({(fileItem.size / (1024 * 1024)).toFixed(1)} MB)
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveFile(idx);
+                              }}
+                              className="text-slate-300 hover:text-rose-500 ml-1 p-0.5 rounded-full transition-colors"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
               </div>
             </div>
 
@@ -305,7 +465,7 @@ const App: React.FC = () => {
                       <h4 className="text-2xl font-black text-rose-900">Có lỗi xảy ra</h4>
                       <p className="text-rose-600 mt-3 text-lg font-medium max-w-md mx-auto">{errorMessage}</p>
                       <button 
-                        onClick={() => file && handleExtract(file)}
+                        onClick={() => files.length > 0 && handleExtractFiles(files)}
                         className="mt-8 px-10 py-4 bg-rose-500 text-white rounded-2xl font-black shadow-xl shadow-rose-500/20 hover:bg-rose-600 transition-all active:scale-95"
                       >
                         Thử lại ngay
@@ -323,8 +483,10 @@ const App: React.FC = () => {
                       </div>
                       <div>
                         <h3 className="text-3xl font-black text-slate-900 tracking-tight">Kết quả bóc tách</h3>
-                        <p className="text-slate-500 font-bold mt-1 uppercase text-xs tracking-widest">
-                          Tìm thấy {extractedData.length} văn bản
+                        <p className="text-slate-500 font-bold mt-1 uppercase text-xs tracking-widest flex items-center gap-2">
+                          <span>Tìm thấy {extractedData.length} văn bản</span>
+                          <span className="text-slate-300">•</span>
+                          <span className="text-blue-600 font-medium normal-case">Đã giữ nguyên văn bản tiếng Pháp (không dịch)</span>
                         </p>
                       </div>
                     </div>
@@ -417,3 +579,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+
